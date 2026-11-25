@@ -197,8 +197,8 @@ rollback;
 -- 10. Налаштування міняють лише Роман і Сергій
 begin;
 select t_as('Саша');
-update public.settings set reminder_hour = 7;
-select t_eq((select reminder_hour from public.settings), 9, 'Саша не міняє налаштування');
+select t_fail($$update public.settings set reminder_hour = 7$$, 'Саша міняє налаштування');
+select t_eq((select reminder_hour from public.settings), 9, 'налаштування не змінились');
 reset role;
 select t_as('Роман');
 update public.settings set reminder_hour = 8;
