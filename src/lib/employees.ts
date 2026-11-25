@@ -1,11 +1,12 @@
-export const CONTRACT_TYPES = ["HPP", "DPP", "DPČ", "IČO", "Інше"] as const;
+export const CONTRACT_TYPES = ["DPP", "DPČ", "HPP"] as const;
+export type ContractType = (typeof CONTRACT_TYPES)[number];
 
+/** Працівник із годинами за вибраний місяць. */
 export type Employee = {
   id: string;
   full_name: string;
   contract_type: string;
   hours: number | null;
-  hours_unit: "week" | "month";
   active: boolean;
   updated_at: string;
   updated_by_name: string | null;
@@ -13,9 +14,7 @@ export type Employee = {
 
 export type EmployeeInput = {
   full_name?: string;
-  contract_type?: string;
-  hours?: number | null;
-  hours_unit?: "week" | "month";
+  contract_type?: ContractType;
   active?: boolean;
 };
 
@@ -25,28 +24,14 @@ export function validateEmployee(input: unknown, partial: boolean): { ok: true; 
   const i = input as Record<string, unknown>;
   const out: EmployeeInput = {};
   if (i.full_name !== undefined || !partial) {
-    const v = typeof i.full_name === "string" ? i.full_name.trim() : "";
+    const v = typeof i.full_name === "string" ? i.full_name.trim().replace(/\s+/g, " ") : "";
     if (!v) return { ok: false, error: "Вкажіть імʼя і прізвище" };
     if (v.length > 200) return { ok: false, error: "Імʼя задовге" };
     out.full_name = v;
   }
   if (i.contract_type !== undefined || !partial) {
-    const v = typeof i.contract_type === "string" ? i.contract_type.trim() : "";
-    if (!v) return { ok: false, error: "Вкажіть тип договору" };
-    if (v.length > 50) return { ok: false, error: "Тип договору задовгий" };
-    out.contract_type = v;
-  }
-  if (i.hours !== undefined) {
-    if (i.hours === null || i.hours === "") out.hours = null;
-    else {
-      const n = typeof i.hours === "number" ? i.hours : Number(String(i.hours).replace(",", "."));
-      if (!Number.isFinite(n) || n < 0 || n > 9999) return { ok: false, error: "Неправильна кількість годин" };
-      out.hours = Math.round(n * 100) / 100;
-    }
-  }
-  if (i.hours_unit !== undefined) {
-    if (i.hours_unit !== "week" && i.hours_unit !== "month") return { ok: false, error: "Години: на тиждень або на місяць" };
-    out.hours_unit = i.hours_unit;
+    if (!CONTRACT_TYPES.includes(i.contract_type as ContractType)) return { ok: false, error: "Тип договору: DPP, DPČ або HPP" };
+    out.contract_type = i.contract_type as ContractType;
   }
   if (i.active !== undefined) {
     if (typeof i.active !== "boolean") return { ok: false, error: "Неправильне значення" };
@@ -56,10 +41,35 @@ export function validateEmployee(input: unknown, partial: boolean): { ok: true; 
   return { ok: true, value: out };
 }
 
-export function hoursLabel(e: Pick<Employee, "hours" | "hours_unit">): string {
-  if (e.hours === null || e.hours === undefined) return "—";
-  const n = Number(e.hours).toString().replace(".", ",");
-  return `${n} год/${e.hours_unit === "week" ? "тиж." : "міс."}`;
+/** Години: число з комою або крапкою, порожньо = null. */
+export function parseHours(v: unknown): { ok: true; value: number | null } | { ok: false; error: string } {
+  if (v === null || v === undefined || (typeof v === "string" && v.trim() === "")) return { ok: true, value: null };
+  const n = typeof v === "number" ? v : Number(String(v).trim().replace(",", "."));
+  if (!Number.isFinite(n) || n < 0 || n > 9999) return { ok: false, error: "Неправильна кількість годин" };
+  return { ok: true, value: Math.round(n * 100) / 100 };
+}
+
+/** Місяць у форматі "2026-10". */
+export function isMonth(v: unknown): v is string {
+  return typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v);
+}
+export function monthToDate(m: string): string {
+  return `${m}-01`;
+}
+export function shiftMonth(m: string, by: number): string {
+  const [y, mo] = m.split("-").map(Number);
+  const d = new Date(Date.UTC(y, mo - 1 + by, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
+export function monthLabel(m: string): string {
+  const [y, mo] = m.split("-").map(Number);
+  return `${MONTHS[mo - 1]} ${y}`;
+}
+
+export function hoursLabel(h: number | null | undefined): string {
+  if (h === null || h === undefined) return "—";
+  return Number(h).toString().replace(".", ",");
 }
 
 export function formatDateTime(iso: string, tz = "Europe/Prague"): string {

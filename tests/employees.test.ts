@@ -3,47 +3,60 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { hoursLabel, validateEmployee, type Employee } from "@/lib/employees";
+import { hoursLabel, isMonth, monthLabel, parseHours, shiftMonth, validateEmployee, type Employee } from "@/lib/employees";
 import { buildEmployeesPdf } from "@/lib/employees-pdf";
 
 describe("перевірка полів працівника", () => {
-  it("нове: потрібні імʼя і тип договору", () => {
-    expect(validateEmployee({ full_name: "Іван Петренко", contract_type: "HPP", hours: "40", hours_unit: "week" }, false))
-      .toEqual({ ok: true, value: { full_name: "Іван Петренко", contract_type: "HPP", hours: 40, hours_unit: "week" } });
+  it("нове: потрібні імʼя і тип договору з трьох", () => {
+    expect(validateEmployee({ full_name: "  Іван   Петренко ", contract_type: "HPP" }, false))
+      .toEqual({ ok: true, value: { full_name: "Іван Петренко", contract_type: "HPP" } });
     expect(validateEmployee({ contract_type: "HPP" }, false)).toMatchObject({ ok: false });
-  });
-  it("години з комою, порожні години, відʼємні", () => {
-    expect(validateEmployee({ hours: "7,5" }, true)).toEqual({ ok: true, value: { hours: 7.5 } });
-    expect(validateEmployee({ hours: "" }, true)).toEqual({ ok: true, value: { hours: null } });
-    expect(validateEmployee({ hours: -1 }, true)).toMatchObject({ ok: false });
+    expect(validateEmployee({ full_name: "Іван", contract_type: "IČO" }, false)).toMatchObject({ ok: false });
+    expect(validateEmployee({ contract_type: "DPČ" }, true)).toEqual({ ok: true, value: { contract_type: "DPČ" } });
   });
   it("редагування без полів — помилка", () => {
     expect(validateEmployee({}, true)).toMatchObject({ ok: false });
   });
+  it("години з комою, порожні, відʼємні", () => {
+    expect(parseHours("7,5")).toEqual({ ok: true, value: 7.5 });
+    expect(parseHours(" 149.5 ")).toEqual({ ok: true, value: 149.5 });
+    expect(parseHours("")).toEqual({ ok: true, value: null });
+    expect(parseHours(null)).toEqual({ ok: true, value: null });
+    expect(parseHours(-1)).toMatchObject({ ok: false });
+    expect(parseHours("abc")).toMatchObject({ ok: false });
+  });
   it("підпис годин", () => {
-    expect(hoursLabel({ hours: 40, hours_unit: "week" })).toBe("40 год/тиж.");
-    expect(hoursLabel({ hours: 7.5, hours_unit: "month" })).toBe("7,5 год/міс.");
-    expect(hoursLabel({ hours: null, hours_unit: "week" })).toBe("—");
+    expect(hoursLabel(149.5)).toBe("149,5");
+    expect(hoursLabel(40)).toBe("40");
+    expect(hoursLabel(null)).toBe("—");
+  });
+  it("місяці", () => {
+    expect(isMonth("2026-10")).toBe(true);
+    expect(isMonth("2026-13")).toBe(false);
+    expect(isMonth("2026-1")).toBe(false);
+    expect(shiftMonth("2026-01", -1)).toBe("2025-12");
+    expect(shiftMonth("2026-12", 1)).toBe("2027-01");
+    expect(monthLabel("2026-10")).toBe("Жовтень 2026");
   });
 });
 
 describe("PDF зі списком працівників", () => {
   const emp = (i: number, active = true): Employee => ({
     id: String(i), full_name: `Працівник Номер ${i} Ґалаґан-Їжаченко`, contract_type: i % 2 ? "HPP" : "DPP",
-    hours: 40, hours_unit: "week", active, updated_at: "2026-11-25T13:40:00Z", updated_by_name: "Саша",
+    hours: i === 3 ? null : 40, active, updated_at: "2026-11-25T13:40:00Z", updated_by_name: "Саша",
   });
 
   it("містить кирилицю, лише активних, рядок про останню зміну, кілька сторінок", async () => {
     const employees = [...Array.from({ length: 45 }, (_, i) => emp(i + 1)), emp(99, false)];
     const pdf = await buildEmployeesPdf({
-      employees, lastChange: { by: "Саша", at: "2026-11-25T13:40:00Z" }, generatedBy: "Роман",
+      month: "2026-10", employees, lastChange: { by: "Саша", at: "2026-11-25T13:40:00Z" }, generatedBy: "Роман",
       now: new Date("2026-11-25T14:00:00Z"),
     });
     const dir = mkdtempSync(path.join(tmpdir(), "pdf-"));
     const file = path.join(dir, "e.pdf");
     writeFileSync(file, pdf);
     const text = execFileSync("pdftotext", ["-layout", file, "-"]).toString();
-    expect(text).toContain("Список працівників");
+    expect(text).toContain("Список працівників · Жовтень 2026");
     expect(text).toContain("усього: 45");
     expect(text).toContain("Остання зміна: Саша, 25.11.2026");
     expect(text).toContain("14:40"); // 13:40 UTC = 14:40 у Празі

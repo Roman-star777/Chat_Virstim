@@ -121,17 +121,26 @@ rollback;
 -- 5. Працівники: права і журнал змін
 begin;
 select t_as('Саша');
-select t_fail($$insert into public.employees (full_name, contract_type, hours) values ('Іван Тест', 'HPP', 40)$$, 'Саша додає працівника');
+select t_fail($$insert into public.employees (full_name, contract_type) values ('Іван Тест', 'HPP')$$, 'Саша додає працівника');
 select t_as('Роман');
-insert into public.employees (full_name, contract_type, hours) values ('Іван Тест', 'HPP', 40);
+insert into public.employees (full_name, contract_type) values ('Іван Тест', 'HPP');
 select t_eq((select m.name from public.employees e join public.members m on m.id = e.updated_by where e.full_name = 'Іван Тест'), 'Роман', 'хто додав');
 select t_eq((select action from public.employee_changes order by id desc limit 1), 'create', 'журнал: create');
+select t_fail($$insert into public.employees (full_name, contract_type) values ('Петро Тест', 'IČO')$$, 'тип договору не з трьох');
+insert into public.employee_hours (employee_id, month, hours) select id, '2026-11-01', 40 from public.employees where full_name = 'Іван Тест';
+select t_eq((select action || ':' || (new_values->>'month') || ':' || (new_values->>'hours') from public.employee_changes order by id desc limit 1), 'hours:2026-11:40.00', 'журнал: години за місяць');
+select t_fail($$insert into public.employee_hours (employee_id, month, hours) select id, '2026-11-15', 1 from public.employees where full_name = 'Іван Тест'$$, 'місяць не з 1-го числа');
 select t_as('Саша');
 update public.employees set contract_type = 'DPP' where full_name = 'Іван Тест';
 select t_eq((select contract_type from public.employees where full_name = 'Іван Тест'), 'DPP', 'Саша змінила тип договору');
 select t_eq((select m.name from public.employees e join public.members m on m.id = e.updated_by where e.full_name = 'Іван Тест'), 'Саша', 'остання зміна: Саша');
 select t_eq((select old_values->>'contract_type' || '→' || (new_values->>'contract_type') from public.employee_changes order by id desc limit 1), 'HPP→DPP', 'журнал: що змінилось');
-select t_fail($$update public.employees set hours = 20 where full_name = 'Іван Тест'$$, 'Саша змінює години');
+update public.employee_hours set hours = 20 where month = '2026-11-01';  -- Саша: RLS не пропускає (0 рядків)
+select t_eq((select hours from public.employee_hours where month = '2026-11-01'), 40.00::numeric, 'години не змінились');
+select t_fail($$insert into public.employee_hours (employee_id, month, hours) select id, '2026-12-01', 5 from public.employees where full_name = 'Іван Тест'$$, 'Саша додає години');
+delete from public.employee_hours where month = '2026-11-01';
+select t_eq((select count(*) from public.employee_hours where month = '2026-11-01'), 1::bigint, 'Саша не може стерти години');
+select t_eq((select count(*) from public.employee_hours), 1::bigint, 'Саша бачить години');
 select t_fail($$update public.employees set full_name = 'Інше' where full_name = 'Іван Тест'$$, 'Саша змінює імʼя');
 select t_fail($$update public.employees set active = false where full_name = 'Іван Тест'$$, 'Саша прибирає працівника');
 delete from public.employees where full_name = 'Іван Тест';
@@ -139,7 +148,13 @@ select t_eq((select count(*) from public.employees where full_name = 'Іван �
 select t_as('Сергій');
 update public.employees set active = false where full_name = 'Іван Тест';
 select t_eq((select action from public.employee_changes order by id desc limit 1), 'deactivate', 'журнал: deactivate');
-select t_eq((select count(*) from public.employee_changes), 3::bigint, 'усього 3 записи в журналі');
+select t_eq((select count(*) from public.employee_changes), 4::bigint, 'усього 4 записи в журналі');
+update public.employee_hours set hours = 41.5 where month = '2026-11-01';
+select t_eq((select old_values->>'hours' || '→' || (new_values->>'hours') from public.employee_changes order by id desc limit 1), '40.00→41.50', 'Сергій змінив години');
+delete from public.employee_hours where month = '2026-11-01';
+select t_eq((select coalesce(new_values->>'hours', 'порожньо') from public.employee_changes order by id desc limit 1), 'порожньо', 'Сергій стер години');
+select t_as('anon');
+select t_fail($$select * from public.employee_hours$$, 'анонім читає години');
 rollback;
 
 -- 6. Неактивний член команди втрачає доступ

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { PDFDocument, rgb, type PDFFont } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
-import { formatDateTime, hoursLabel, type Employee } from "./employees";
+import { formatDateTime, hoursLabel, monthLabel, type Employee } from "./employees";
 
 async function loadFonts(): Promise<{ regular: Uint8Array; bold: Uint8Array }> {
   const dir = path.join(process.cwd(), "assets", "fonts");
@@ -16,6 +16,7 @@ async function loadFonts(): Promise<{ regular: Uint8Array; bold: Uint8Array }> {
 
 /** PDF зі списком активних працівників і рядком «остання зміна». */
 export async function buildEmployeesPdf(opts: {
+  month: string;
   employees: Employee[];
   lastChange: { by: string | null; at: string } | null;
   generatedBy: string;
@@ -35,7 +36,7 @@ export async function buildEmployeesPdf(opts: {
     { title: "№", x: margin, w: 28 },
     { title: "Імʼя і прізвище", x: margin + 28, w: 250 },
     { title: "Тип договору", x: margin + 278, w: 110 },
-    { title: "Години", x: margin + 388, w: 111 },
+    { title: "Години за місяць", x: margin + 388, w: 111 },
   ];
   const rowH = 22;
   const grey = rgb(0.4, 0.4, 0.4);
@@ -59,7 +60,7 @@ export async function buildEmployeesPdf(opts: {
     y -= rowH - 6;
   };
 
-  text("Список працівників", margin, y, bold, 18);
+  text(`Список працівників · ${monthLabel(opts.month)}`, margin, y, bold, 18);
   y -= 22;
   const active = opts.employees.filter((e) => e.active);
   text(`Станом на ${formatDateTime(now.toISOString())} · усього: ${active.length}`, margin, y, regular, 10, grey);
@@ -77,7 +78,7 @@ export async function buildEmployeesPdf(opts: {
       y = A4[1] - margin;
       header();
     }
-    const cells = [String(idx + 1), e.full_name, e.contract_type, hoursLabel(e)];
+    const cells = [String(idx + 1), e.full_name, e.contract_type, hoursLabel(e.hours)];
     cells.forEach((v, i) => text(fit(v, regular, 10, cols.at(i)!.w), cols.at(i)!.x, y, regular, 10));
     y -= rowH;
   });

@@ -6,7 +6,9 @@ import {
   type Filter, type Member, type Task,
 } from "@/lib/tasks";
 import { addDays, dueLabel, longDate, nextFriday } from "@/lib/dates";
-import { CONTRACT_TYPES, formatDateTime, hoursLabel, type Employee } from "@/lib/employees";
+import {
+  CONTRACT_TYPES, formatDateTime, hoursLabel, isMonth, monthLabel, parseHours, shiftMonth, type Employee,
+} from "@/lib/employees";
 
 // ---------------------------------------------------------------------------
 // Telegram
@@ -21,6 +23,8 @@ type TgWebApp = {
   openLink?: (url: string) => void;
   downloadFile?: (p: { url: string; file_name: string }, cb?: (ok: boolean) => void) => void;
   isVersionAtLeast?: (v: string) => boolean;
+  setHeaderColor?: (c: string) => void;
+  setBackgroundColor?: (c: string) => void;
 };
 function tg(): TgWebApp | undefined {
   return (globalThis as unknown as { Telegram?: { WebApp?: TgWebApp } }).Telegram?.WebApp;
@@ -67,6 +71,9 @@ export default function App() {
     const w = tg();
     w?.ready();
     w?.expand();
+    try {
+      if (w?.isVersionAtLeast?.("6.1")) { w.setHeaderColor?.("#f3f5f7"); w.setBackgroundColor?.("#f3f5f7"); }
+    } catch { /* старий Telegram — лишаємо його кольори */ }
     const initData = w?.initData ?? "";
     if (!initData) {
       setFatal("Відкрийте цю сторінку через бота в Telegram.");
@@ -412,13 +419,24 @@ function Documents() {
 // ---------------------------------------------------------------------------
 // Працівники
 // ---------------------------------------------------------------------------
-type EmpData = { employees: Employee[]; lastChange: { by: string | null; at: string } | null; canManage: boolean };
+type EmpData = {
+  employees: Employee[];
+  lastChange: { by: string | null; at: string } | null;
+  canManage: boolean;
+  month: string;
+  monthsWithHours: string[];
+};
 type Change = { id: number; changed_by_name: string | null; changed_at: string; action: string; old_values: Record<string, unknown> | null; new_values: Record<string, unknown> | null };
 
-const FIELD_NAMES: Record<string, string> = { full_name: "імʼя", contract_type: "тип договору", hours: "години", hours_unit: "одиниця годин", active: "активний" };
+const FIELD_NAMES: Record<string, string> = { full_name: "імʼя", contract_type: "договір", hours: "години", hours_unit: "одиниця годин", active: "активний" };
 const ACTIONS: Record<string, string> = { create: "додав(ла)", update: "змінив(ла)", deactivate: "прибрав(ла)", reactivate: "повернув(ла)", import: "початковий імпорт" };
 
 function describeChange(c: Change): string {
+  if (c.action === "hours" && c.new_values) {
+    const m = String(c.new_values.month ?? "");
+    const fmt = (v: unknown) => (v === null || v === undefined ? "—" : hoursLabel(Number(v)));
+    return `години за ${isMonth(m) ? monthLabel(m).toLowerCase() : m}: ${fmt(c.old_values?.hours)} → ${fmt(c.new_values.hours)}`;
+  }
   if (c.action !== "update" || !c.old_values || !c.new_values) return ACTIONS[c.action] ?? c.action;
   const parts = Object.keys(c.new_values)
     .filter((k) => JSON.stringify(c.old_values![k]) !== JSON.stringify(c.new_values![k]))
@@ -428,24 +446,79 @@ function describeChange(c: Change): string {
 
 function Employees({ api }: { api: Api }) {
   const [data, setData] = useState<EmpData | null>(null);
+  const [month, setMonth] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null);
+  const [picking, setPicking] = useState<string | null>(null);
   const [history, setHistory] = useState<{ id: string; changes: Change[] } | null>(null);
+  const [adding, setAdding] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try { setData(await api<EmpData>("/api/employees")); } catch (e) { setError((e as Error).message); }
+  const load = useCallback(async (m: string | null) => {
+    try {
+      const d = await api<EmpData>(`/api/employees${m ? `?month=${m}` : ""}`);
+      setData(d);
+      setMonth(d.month);
+    } catch (e) { setError((e as Error).message); }
   }, [api]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(null); }, [load]);
+
+  function go(by: number) {
+    if (!month) return;
+    setPicking(null);
+    setHistory(null);
+    setError(null);
+    void load(shiftMonth(month, by));
+  }
+
+  async function setContract(e: Employee, contract_type: string) {
+    setPicking(null);
+    if (contract_type === e.contract_type) return;
+    setError(null);
+    haptic();
+    setData((d) => d && { ...d, employees: d.employees.map((x) => (x.id === e.id ? { ...x, contract_type } : x)) });
+    try {
+      await api(`/api/employees/${e.id}`, { method: "PATCH", body: JSON.stringify({ contract_type }) });
+    } catch (err) { setError((err as Error).message); }
+    await load(month);
+  }
+
+  async function saveHours(e: Employee, raw: string) {
+    const v = parseHours(raw);
+    if (!v.ok) { setError(v.error); return; }
+    if (v.value === e.hours) return;
+    setError(null);
+    setData((d) => d && { ...d, employees: d.employees.map((x) => (x.id === e.id ? { ...x, hours: v.value } : x)) });
+    try {
+      await api(`/api/employees/${e.id}/hours`, { method: "PUT", body: JSON.stringify({ month, hours: v.value }) });
+    } catch (err) { setError((err as Error).message); }
+    await load(month);
+  }
+
+  async function remove(e: Employee) {
+    if (!(await confirmAsk(`Видалити «${e.full_name}» зі списку? Історія змін збережеться.`))) return;
+    setError(null);
+    try {
+      await api(`/api/employees/${e.id}`, { method: "PATCH", body: JSON.stringify({ active: false }) });
+    } catch (err) { setError((err as Error).message); }
+    await load(month);
+  }
+
+  async function toggleHistory(id: string) {
+    if (history?.id === id) return setHistory(null);
+    try {
+      const { changes } = await api<{ changes: Change[] }>(`/api/employees/${id}`);
+      setHistory({ id, changes });
+    } catch (e) { setError((e as Error).message); }
+  }
 
   async function downloadPdf() {
+    if (!month) return;
     setPdfBusy(true);
     setError(null);
     try {
-      const { url } = await api<{ url: string }>("/api/employees/pdf-link", { method: "POST" });
+      const { url } = await api<{ url: string }>("/api/employees/pdf-link", { method: "POST", body: JSON.stringify({ month }) });
       const w = tg();
-      const name = `pracivnyky-${new Date().toISOString().slice(0, 10)}.pdf`;
+      const name = `pracivnyky-${month}.pdf`;
       if (w?.downloadFile && w.isVersionAtLeast?.("8.0")) w.downloadFile({ url, file_name: name });
       else if (w?.openLink) w.openLink(url);
       else window.open(url, "_blank");
@@ -456,108 +529,135 @@ function Employees({ api }: { api: Api }) {
     }
   }
 
-  async function showHistory(id: string) {
-    if (history?.id === id) return setHistory(null);
-    try {
-      const { changes } = await api<{ changes: Change[] }>(`/api/employees/${id}`);
-      setHistory({ id, changes });
-    } catch (e) { setError((e as Error).message); }
-  }
-
-  async function deactivate(e: Employee) {
-    if (!(await confirmAsk(`Прибрати «${e.full_name}» зі списку? Історія збережеться.`))) return;
-    try {
-      await api(`/api/employees/${e.id}`, { method: "PATCH", body: JSON.stringify({ active: false }) });
-      await load();
-    } catch (err) { setError((err as Error).message); }
-  }
-
-  if (!data) return <div className="center">{error ?? "Завантаження…"}</div>;
-  const active = data.employees.filter((e) => e.active);
+  if (!data || !month) return <div className="center">{error ?? "Завантаження…"}</div>;
+  const list = data.employees;
+  const total = list.reduce((s, e) => s + (e.hours ?? 0), 0);
+  const withHours = list.filter((e) => e.hours !== null).length;
 
   return (
     <>
-      <h1>Працівники</h1>
-      <div className="sub">
-        {data.lastChange
-          ? `Остання зміна: ${data.lastChange.by ?? "система"}, ${formatDateTime(data.lastChange.at)}`
-          : "Змін ще не було"}
+      <div className="head">
+        <div>
+          <h1>Працівники</h1>
+          <div className="sub">
+            {data.lastChange
+              ? `Остання зміна: ${data.lastChange.by ?? "система"}, ${formatDateTime(data.lastChange.at)}`
+              : "Змін ще не було"}
+          </div>
+        </div>
+        <button className="pill-btn" onClick={downloadPdf} disabled={pdfBusy}>{pdfBusy ? "…" : "PDF"}</button>
       </div>
 
-      <div className="row2" style={{ marginTop: 12 }}>
-        <button className="secondary" onClick={downloadPdf} disabled={pdfBusy}>{pdfBusy ? "Готую PDF…" : "⬇ Скачати PDF"}</button>
-        {data.canManage && <button className="secondary" onClick={() => setAdding(!adding)}>+ Додати</button>}
+      <div className="months">
+        <button className="mnav" onClick={() => go(-1)} aria-label="Попередній місяць">‹</button>
+        <div className="mcur">{monthLabel(month)}</div>
+        <button className="mnav" onClick={() => go(1)} aria-label="Наступний місяць">›</button>
       </div>
-      {error && <div className="error">{error}</div>}
-
-      {adding && (
-        <EmployeeForm
-          canManage
-          onCancel={() => setAdding(false)}
-          onSave={async (v) => { await api("/api/employees", { method: "POST", body: JSON.stringify(v) }); setAdding(false); await load(); }}
-        />
+      {data.monthsWithHours.length > 1 && (
+        <div className="chips">
+          {data.monthsWithHours.slice(0, 6).map((m) => (
+            <button key={m} className={`chip${m === month ? " on" : ""}`} onClick={() => { setPicking(null); setHistory(null); void load(m); }}>
+              {monthLabel(m)}
+            </button>
+          ))}
+        </div>
       )}
 
-      {active.length === 0 && <div className="center" style={{ minHeight: "25vh" }}>Список порожній.</div>}
-      {active.map((e) => (
-        <div key={e.id} className="emp">
-          {editing === e.id ? (
-            <EmployeeForm
-              initial={e}
-              canManage={data.canManage}
-              onCancel={() => setEditing(null)}
-              onSave={async (v) => { await api(`/api/employees/${e.id}`, { method: "PATCH", body: JSON.stringify(v) }); setEditing(null); await load(); }}
-            />
-          ) : (
-            <>
-              <div className="name">{e.full_name}</div>
-              <div className="meta">
-                <span className="who">{e.contract_type}</span>
-                <span>· {hoursLabel(e)}</span>
-              </div>
-              <div className="meta">змінив(ла): {e.updated_by_name ?? "система"}, {formatDateTime(e.updated_at)}</div>
-              <div className="row2">
-                <button className="secondary" onClick={() => setEditing(e.id)}>{data.canManage ? "Змінити" : "Змінити тип договору"}</button>
-                <button className="secondary" onClick={() => showHistory(e.id)}>Історія</button>
-                {data.canManage && <button className="secondary danger" onClick={() => deactivate(e)}>Прибрати</button>}
-              </div>
-              {history?.id === e.id && (
-                <div className="hist">
-                  {history.changes.map((c) => (
-                    <div key={c.id}>{formatDateTime(c.changed_at)} · {c.changed_by_name ?? "система"} {describeChange(c)}</div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
+      {error && <div className="error">{error}</div>}
+
+      <div className="elist">
+        <div className="erow ehead">
+          <span className="ename">Імʼя</span>
+          <span className="etype">Договір</span>
+          <span className="ehours">Год.</span>
+          {data.canManage && <span className="edel" />}
         </div>
+        {list.length === 0 && <div className="note" style={{ padding: "16px 0" }}>Список порожній.</div>}
+        {list.map((e) => (
+          <div key={e.id} className="eitem">
+            <div className="erow">
+              <button className="ename" onClick={() => toggleHistory(e.id)}>{e.full_name}</button>
+              <button className={`etype tpill${picking === e.id ? " open" : ""}`} onClick={() => setPicking(picking === e.id ? null : e.id)}>
+                {e.contract_type}
+              </button>
+              {data.canManage ? (
+                <HoursInput key={`${e.id}-${month}-${e.hours}`} value={e.hours} onSave={(v) => saveHours(e, v)} />
+              ) : (
+                <span className="ehours">{hoursLabel(e.hours)}</span>
+              )}
+              {data.canManage && (
+                <button className="edel" onClick={() => remove(e)} aria-label="Видалити">✕</button>
+              )}
+            </div>
+            {picking === e.id && (
+              <div className="tpick">
+                {CONTRACT_TYPES.map((c) => (
+                  <button key={c} className={`chip${c === e.contract_type ? " on" : ""}`} onClick={() => setContract(e, c)}>{c}</button>
+                ))}
+              </div>
+            )}
+            {history?.id === e.id && (
+              <div className="hist">
+                {history.changes.length === 0 && <div>Змін ще не було</div>}
+                {history.changes.slice(0, 8).map((c) => (
+                  <div key={c.id}>{formatDateTime(c.changed_at)} · {c.changed_by_name ?? "система"} {describeChange(c)}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        <div className="etotal">
+          <span>Усього: {list.length}</span>
+          <span>{withHours > 0 ? `${hoursLabel(Math.round(total * 100) / 100)} год` : "годин за цей місяць ще немає"}</span>
+        </div>
+      </div>
+
+      {data.canManage && (adding ? (
+        <AddEmployee
+          month={month}
+          onCancel={() => setAdding(false)}
+          onSave={async (v) => { await api("/api/employees", { method: "POST", body: JSON.stringify(v) }); setAdding(false); await load(month); }}
+        />
+      ) : (
+        <button className="add-btn" onClick={() => setAdding(true)}>+ Додати працівника</button>
       ))}
+      {!data.canManage && <div className="note" style={{ marginTop: 10 }}>Ви можете змінювати тип договору. Години, додавання і видалення — у Романа і Сергія.</div>}
     </>
   );
 }
 
-function EmployeeForm({ initial, canManage, onSave, onCancel }: {
-  initial?: Employee;
-  canManage: boolean;
+function HoursInput({ value, onSave }: { value: number | null; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value === null ? "" : hoursLabel(value));
+  return (
+    <input
+      className="ehours hin"
+      type="text"
+      inputMode="decimal"
+      placeholder="—"
+      value={v}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => onSave(v)}
+      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+    />
+  );
+}
+
+function AddEmployee({ month, onSave, onCancel }: {
+  month: string;
   onSave: (v: Record<string, unknown>) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [fullName, setFullName] = useState(initial?.full_name ?? "");
-  const [contract, setContract] = useState(initial?.contract_type ?? "HPP");
-  const [hours, setHours] = useState(initial?.hours?.toString() ?? "");
-  const [unit, setUnit] = useState<"week" | "month">(initial?.hours_unit ?? "week");
+  const [fullName, setFullName] = useState("");
+  const [contract, setContract] = useState<string>("DPČ");
+  const [hours, setHours] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const options = CONTRACT_TYPES.includes(contract as (typeof CONTRACT_TYPES)[number]) ? CONTRACT_TYPES : [contract, ...CONTRACT_TYPES];
 
   async function submit() {
     setError(null);
     setSaving(true);
     try {
-      const v: Record<string, unknown> = canManage
-        ? { full_name: fullName, contract_type: contract, hours: hours === "" ? null : hours, hours_unit: unit }
-        : { contract_type: contract };
-      await onSave(v);
+      await onSave({ full_name: fullName, contract_type: contract, hours, month });
     } catch (e) {
       setError((e as Error).message);
       setSaving(false);
@@ -565,34 +665,20 @@ function EmployeeForm({ initial, canManage, onSave, onCancel }: {
   }
 
   return (
-    <div className="card" style={{ marginTop: 10 }}>
-      {canManage && (
-        <>
-          <div className="label" style={{ marginTop: 0 }}>Імʼя і прізвище</div>
-          <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} />
-        </>
-      )}
-      {!canManage && <div className="name">{initial?.full_name}</div>}
-      <div className="label">Тип договору</div>
-      <select value={contract} onChange={(e) => setContract(e.target.value)}>
-        {options.map((c) => <option key={c} value={c}>{c}</option>)}
-      </select>
-      {canManage && (
-        <>
-          <div className="label">Кількість годин</div>
-          <div className="row2" style={{ marginTop: 0 }}>
-            <input type="number" inputMode="decimal" min={0} value={hours} onChange={(e) => setHours(e.target.value)} />
-            <select value={unit} onChange={(e) => setUnit(e.target.value as "week" | "month")}>
-              <option value="week">на тиждень</option>
-              <option value="month">на місяць</option>
-            </select>
-          </div>
-        </>
-      )}
+    <div className="card addcard">
+      <input type="text" placeholder="Імʼя і прізвище" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+      <div className="addrow">
+        <div className="tpick" style={{ padding: 0 }}>
+          {CONTRACT_TYPES.map((c) => (
+            <button key={c} className={`chip${c === contract ? " on" : ""}`} onClick={() => setContract(c)}>{c}</button>
+          ))}
+        </div>
+        <input type="text" inputMode="decimal" placeholder={`год. (${monthLabel(month).split(" ")[0].toLowerCase()})`} value={hours} onChange={(e) => setHours(e.target.value)} />
+      </div>
       {error && <div className="error">{error}</div>}
-      <div className="row2">
+      <div className="addrow">
         <button className="secondary" onClick={onCancel}>Скасувати</button>
-        <button className="secondary" style={{ borderColor: "var(--btn)" }} disabled={saving} onClick={submit}>{saving ? "Зберігаю…" : "Зберегти"}</button>
+        <button className="pill-btn wide" disabled={saving} onClick={submit}>{saving ? "Зберігаю…" : "Додати"}</button>
       </div>
     </div>
   );
