@@ -3,6 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 import { appUrl, ensureWebhook, tgCall, TgError } from "@/lib/bot";
 import { dbService } from "@/lib/supabase";
 import { todayInTz } from "@/lib/dates";
+import { monthlyReportDue } from "@/lib/monthly";
+import { sendMonthlyReportOnce } from "@/lib/monthly-report";
 import { hourInTz, planReminders, reminderText, type RemTask, type ReminderKind } from "@/lib/reminders";
 
 export const runtime = "nodejs";
@@ -35,6 +37,17 @@ export async function POST(req: Request) {
   const today = todayInTz(tz);
   report.hour = hour;
   report.today = today;
+  // Щомісячний список працівників у групу (10-го о годині нагадувань)
+  const reportMonth = monthlyReportDue(today, hour, s.reminder_hour);
+  if (reportMonth && s.group_chat_id) {
+    try {
+      report.monthly = { month: reportMonth, ...(await sendMonthlyReportOnce(db, reportMonth, s.group_chat_id)) };
+    } catch (e) {
+      console.error("monthly report failed", e);
+      report.monthly = { month: reportMonth, error: String(e) };
+    }
+  }
+
   if (hour < s.reminder_hour) return NextResponse.json({ ...report, reminders: "ще не час" });
 
   const [tasks, completions, members, sent] = await Promise.all([

@@ -56,3 +56,15 @@ export async function ensureWebhook(): Promise<{ changed: boolean; url: string; 
   });
   return { changed: true, url, pending: info.pending_update_count };
 }
+
+/** Надсилає файл (multipart). */
+export async function tgSendDocument(chatId: number, fileName: string, bytes: Uint8Array, caption?: string): Promise<{ message_id: number }> {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (caption) form.append("caption", caption);
+  form.append("document", new Blob([Buffer.from(bytes)], { type: "application/pdf" }), fileName);
+  const res = await fetch(`https://api.telegram.org/bot${token()}/sendDocument`, { method: "POST", body: form });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { message_id: number }; error_code?: number; description?: string };
+  if (!body.ok) throw new TgError("sendDocument", body.error_code ?? res.status, body.description ?? "невідома помилка");
+  return body.result!;
+}

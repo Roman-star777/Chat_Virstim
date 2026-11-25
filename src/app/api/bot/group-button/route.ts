@@ -3,6 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 import { dbService } from "@/lib/supabase";
 import { hasMainApp, postGroupButton } from "@/lib/group-button";
 import { appUrl, tgCall, TgError } from "@/lib/bot";
+import { sendMonthlyPdf } from "@/lib/monthly-report";
+import { isMonth } from "@/lib/employees";
 
 export const runtime = "nodejs";
 
@@ -16,7 +18,19 @@ export async function POST(req: Request) {
 
   const { data: s } = await db.from("settings").select("group_chat_id").single();
   if (!s?.group_chat_id) return NextResponse.json({ error: "бот ще не в групі" }, { status: 409 });
-  if (new URL(req.url).searchParams.get("probe") === "1") {
+  const sp = new URL(req.url).searchParams;
+  if (sp.get("test_monthly")) {
+    // Перевірка PDF-розсилки: надіслати список за місяць особисто Роману (не в групу)
+    const month = sp.get("test_monthly")!;
+    if (!isMonth(month)) return NextResponse.json({ error: "month" }, { status: 400 });
+    const { data: r } = await db.from("members").select("tg_user_id").eq("name", "Роман").single();
+    if (!r?.tg_user_id) return NextResponse.json({ error: "Роман не привʼязаний" }, { status: 409 });
+    try {
+      const msg = await sendMonthlyPdf(db, month, Number(r.tg_user_id));
+      return NextResponse.json({ sent: true, messageId: msg.message_id });
+    } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }); }
+  }
+  if (sp.get("probe") === "1") {
     // Перевірка: чи дозволяє Telegram кнопку меню (синя кнопка біля поля вводу) у групі
     const me = await tgCall<Record<string, unknown>>("getMe");
     let menu: string;

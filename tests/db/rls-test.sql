@@ -185,4 +185,13 @@ reset role;
 select t_eq((select length(value) from public.internal_secrets where name = 'cron'), 64, 'ключ запуску створено');
 rollback;
 
+-- 9. Щомісячний список: один запис на місяць, команда лише читає
+begin;
+insert into public.monthly_reports (month, chat_id) values ('2026-11-01', -1);
+select t_fail($$insert into public.monthly_reports (month, chat_id) values ('2026-11-01', -1)$$, 'вдруге той самий місяць');
+select t_as('Роман');
+select t_eq((select count(*) from public.monthly_reports), 1::bigint, 'Роман бачить журнал розсилки');
+select t_fail($$insert into public.monthly_reports (month, chat_id) values ('2026-12-01', -1)$$, 'Роман пише в журнал розсилки');
+rollback;
+
 select 'усі перевірки прав пройдено' as result;
