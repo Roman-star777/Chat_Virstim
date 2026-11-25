@@ -194,4 +194,15 @@ select t_eq((select count(*) from public.monthly_reports), 1::bigint, 'Рома�
 select t_fail($$insert into public.monthly_reports (month, chat_id) values ('2026-12-01', -1)$$, 'Роман пише в журнал розсилки');
 rollback;
 
+-- 10. Налаштування міняють лише Роман і Сергій
+begin;
+select t_as('Саша');
+update public.settings set reminder_hour = 7;
+select t_eq((select reminder_hour from public.settings), 9, 'Саша не міняє налаштування');
+reset role;
+select t_as('Роман');
+update public.settings set reminder_hour = 8;
+select t_eq((select reminder_hour from public.settings), 8, 'Роман міняє годину нагадувань');
+rollback;
+
 select 'усі перевірки прав пройдено' as result;

@@ -4,6 +4,7 @@ import { dbService } from "@/lib/supabase";
 import { hasMainApp, postGroupButton } from "@/lib/group-button";
 import { appUrl, tgCall, TgError } from "@/lib/bot";
 import { sendMonthlyPdf } from "@/lib/monthly-report";
+import { NOTICE } from "@/lib/bot-handlers";
 import { isMonth } from "@/lib/employees";
 
 export const runtime = "nodejs";
@@ -29,6 +30,13 @@ export async function POST(req: Request) {
       const msg = await sendMonthlyPdf(db, month, Number(r.tg_user_id));
       return NextResponse.json({ sent: true, messageId: msg.message_id });
     } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }); }
+  }
+  if (sp.get("edit_notice")) {
+    // Оновити текст вітання бота в групі (без згадок про ШІ)
+    try {
+      await tgCall("editMessageText", { chat_id: s.group_chat_id, message_id: Number(sp.get("edit_notice")), text: NOTICE });
+      return NextResponse.json({ edited: true });
+    } catch (e) { return NextResponse.json({ error: e instanceof TgError ? e.description : String(e) }, { status: 500 }); }
   }
   if (sp.get("probe") === "1") {
     // Перевірка: чи дозволяє Telegram кнопку меню (синя кнопка біля поля вводу) у групі

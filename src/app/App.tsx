@@ -6,6 +6,7 @@ import {
   type Filter, type Member, type Task,
 } from "@/lib/tasks";
 import { addDays, dueLabel, longDate, nextFriday } from "@/lib/dates";
+import { CATEGORIES, CATEGORY_LABELS, STATUS_LABELS, type Category } from "@/lib/doc-rules";
 import {
   CONTRACT_TYPES, formatDateTime, hoursLabel, isMonth, monthLabel, parseHours, shiftMonth, type Employee,
 } from "@/lib/employees";
@@ -116,7 +117,7 @@ export default function App() {
       ) : tab === "tasks" ? (
         <Tasks api={api} boot={boot} setBoot={setBoot} onNew={() => setCreating(true)} reload={reload} />
       ) : tab === "docs" ? (
-        <Documents />
+        <Documents api={api} />
       ) : (
         <Employees api={api} />
       )}
@@ -404,14 +405,108 @@ function NewTask({ api, boot, onClose, onCreated }: {
 // ---------------------------------------------------------------------------
 // Документи (крок 4)
 // ---------------------------------------------------------------------------
-function Documents() {
+type Doc = {
+  id: string; file_name: string; mime_type: string | null; size_bytes: number | null; status: string;
+  category: Category; created_at: string; uploaded_by_name: string | null; confirmed: boolean; stored: boolean;
+};
+type DocData = { documents: Doc[]; groupConnected: boolean };
+
+function fileIcon(d: Doc): string {
+  const m = d.mime_type ?? "";
+  if (m === "application/pdf" || d.file_name.toLowerCase().endsWith(".pdf")) return "📕";
+  if (m.startsWith("image/")) return "🖼";
+  if (/sheet|excel|csv/.test(m) || /\.(xlsx?|csv)$/i.test(d.file_name)) return "📊";
+  if (/word|document/.test(m) || /\.docx?$/i.test(d.file_name)) return "📘";
+  return "📄";
+}
+function sizeLabel(n: number | null): string {
+  if (!n) return "";
+  return n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1).replace(".", ",")} МБ` : `${Math.max(1, Math.round(n / 1024))} КБ`;
+}
+
+function Documents({ api }: { api: Api }) {
+  const [data, setData] = useState<DocData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [cat, setCat] = useState<"all" | "unsorted" | Category>("all");
+  const [q, setQ] = useState("");
+  const [picking, setPicking] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try { setData(await api<DocData>("/api/documents")); } catch (e) { setError((e as Error).message); }
+  }, [api]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function setCategory(d: Doc, category: Category) {
+    setPicking(null);
+    haptic();
+    setData((x) => x && { ...x, documents: x.documents.map((y) => (y.id === d.id ? { ...y, category, confirmed: true } : y)) });
+    try { await api(`/api/documents/${d.id}`, { method: "PATCH", body: JSON.stringify({ category }) }); }
+    catch (e) { setError((e as Error).message); await load(); }
+  }
+
+  async function open(d: Doc) {
+    if (!d.stored) return;
+    setError(null);
+    try {
+      const { url, fileName } = await api<{ url: string; fileName: string }>(`/api/documents/${d.id}/link`, { method: "POST" });
+      const w = tg();
+      if (w?.downloadFile && w.isVersionAtLeast?.("8.0")) w.downloadFile({ url, file_name: fileName });
+      else if (w?.openLink) w.openLink(url);
+      else window.open(url, "_blank");
+    } catch (e) { setError((e as Error).message); }
+  }
+
+  if (!data) return <div className="center">{error ?? "Завантаження…"}</div>;
+  const docs = data.documents;
+  const counts: Record<string, number> = { all: docs.length, unsorted: docs.filter((d) => !d.confirmed).length };
+  for (const c of CATEGORIES) counts[c] = docs.filter((d) => d.category === c).length;
+  const needle = q.trim().toLowerCase();
+  const list = docs.filter((d) =>
+    (cat === "all" || (cat === "unsorted" ? !d.confirmed : d.category === cat)) &&
+    (!needle || d.file_name.toLowerCase().includes(needle) || (d.uploaded_by_name ?? "").toLowerCase().includes(needle)));
+
   return (
     <>
       <h1>Документи</h1>
-      <div className="sub">Усе з чату в одному місці</div>
-      <div className="center" style={{ minHeight: "40vh" }}>
-        Цей розділ запрацює на кроці 4: бот збиратиме файли з чату, а ШІ розкладатиме їх за категоріями.
+      <div className="sub">Усі файли з групи в одному місці</div>
+      <input className="search" type="text" placeholder="Пошук за назвою файлу" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="chips">
+        {(["all", "unsorted", ...CATEGORIES] as const).map((k) => (
+          <button key={k} className={`chip${cat === k ? " on" : ""}`} onClick={() => setCat(k)}>
+            {k === "all" ? "Усі" : k === "unsorted" ? "Не розкладені" : CATEGORY_LABELS[k]} <span className="n">{counts[k] ?? 0}</span>
+          </button>
+        ))}
       </div>
+      {error && <div className="error">{error}</div>}
+      {!data.groupConnected && <div className="note">Бот ще не підключений до групи.</div>}
+      <div className="elist">
+        {list.length === 0 && <div className="note" style={{ padding: "16px 0" }}>{docs.length ? "Нічого не знайдено." : "Файлів ще немає. Надішліть документ у групу, і він з'явиться тут."}</div>}
+        {list.map((d) => (
+          <div key={d.id} className="eitem">
+            <div className="erow drow">
+              <span className="dicon">{fileIcon(d)}</span>
+              <button className="dbody" onClick={() => open(d)} disabled={!d.stored}>
+                <div className="dname">{d.file_name}</div>
+                <div className="dmeta">
+                  {formatDateTime(d.created_at)}{d.uploaded_by_name ? ` · ${d.uploaded_by_name}` : ""}{d.size_bytes ? ` · ${sizeLabel(d.size_bytes)}` : ""}
+                  {!d.stored && <span className="danger"> · {STATUS_LABELS[d.status] || "файл не збережено"}</span>}
+                </div>
+              </button>
+              <button className={`tpill dcat${d.confirmed ? "" : " unsure"}${picking === d.id ? " open" : ""}`} onClick={() => setPicking(picking === d.id ? null : d.id)}>
+                {CATEGORY_LABELS[d.category]}{d.confirmed ? "" : "?"}
+              </button>
+            </div>
+            {picking === d.id && (
+              <div className="tpick wrapc">
+                {CATEGORIES.map((c) => (
+                  <button key={c} className={`chip${c === d.category && d.confirmed ? " on" : ""}`} onClick={() => setCategory(d, c)}>{CATEGORY_LABELS[c]}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {counts.unsorted > 0 && <div className="note" style={{ marginTop: 10 }}>«?» біля категорії — це підказка за назвою файлу. Натисніть, щоб вибрати правильну.</div>}
     </>
   );
 }

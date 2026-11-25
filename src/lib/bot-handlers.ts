@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { appUrl, tgCall, tgDownload } from "./bot";
 import { hasMainApp, postGroupButton, BOT_USERNAME } from "./group-button";
+import { suggestCategory } from "./doc-rules";
 import {
   MAX_BOT_DOWNLOAD, botMembershipChange, extractFile, isGroup, messageRow, storageName,
   type TgChatMemberUpdated, type TgMessage,
@@ -23,14 +24,14 @@ export async function loadContext(db: SupabaseClient) {
 }
 type Ctx = Awaited<ReturnType<typeof loadContext>>;
 
-const NOTICE = [
+export const NOTICE = [
   "Привіт! Я бот задач і документів фірми.",
   "",
   "Що я роблю в цій групі:",
   "• зберігаю повідомлення і файли (документи, фото) у закритій базі фірми. Доступ мають лише Роман, Сергій і Саша;",
   "• нагадую про задачі в особистих повідомленнях о 9:00.",
   "",
-  "Пізніше документи розбиратиме штучний інтелект Claude (Anthropic), щоб розкласти їх за категоріями. Дані працівників туди не надсилаються.",
+  "Нічого не надсилається жодному штучному інтелекту чи стороннім сервісам. Документи розкладаєте ви самі в міні-апці.",
 ].join("\n");
 
 /** Бота додали/прибрали з групи. Прийняти групу може лише Роман або Сергій. */
@@ -95,7 +96,7 @@ export async function onGroupMessage(db: SupabaseClient, ctx: Ctx, m: TgMessage)
   const messageId = data?.[0]?.id as string | undefined;
   if (!messageId) return null; // уже було (Telegram повторив)
   const file = extractFile(m);
-  return file ? { messageId, file, uploadedBy: row.from_member_id } : null;
+  return file ? { messageId, file, uploadedBy: row.from_member_id, caption: row.text } : null;
 }
 
 export async function onEditedMessage(db: SupabaseClient, m: TgMessage) {
@@ -111,6 +112,7 @@ export async function storeFile(db: SupabaseClient, job: NonNullable<Awaited<Ret
   const base = {
     tg_file_unique_id: file.fileUniqueId, tg_file_id: file.fileId, file_name: file.fileName,
     mime_type: file.mimeType, size_bytes: file.size, uploaded_by: job.uploadedBy, source_message_id: job.messageId,
+    category: suggestCategory(file.fileName, job.caption), // лише підказка за назвою, людина змінює в міні-апці
   };
   if (file.size !== null && file.size > MAX_BOT_DOWNLOAD) {
     const { error } = await db.from("documents").insert({ ...base, status: "too_large" });
@@ -127,7 +129,7 @@ export async function storeFile(db: SupabaseClient, job: NonNullable<Awaited<Ret
   const up = await db.storage.from("documents").upload(path, bytes, { contentType: file.mimeType ?? "application/octet-stream", upsert: false });
   if (up.error && !/exists/i.test(up.error.message)) throw up.error;
   const { data, error } = await db.from("documents")
-    .insert({ ...base, sha256: sha, size_bytes: bytes.length, storage_path: path, status: "queued" })
+    .insert({ ...base, sha256: sha, size_bytes: bytes.length, storage_path: path, status: "needs_confirmation" })
     .select("id").single();
   if (error) {
     if (error.code === "23505") return { status: "duplicate" as const };
