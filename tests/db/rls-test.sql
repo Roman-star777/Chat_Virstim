@@ -174,4 +174,15 @@ update public.tasks set status = 'done' where title = 'Системна';
 select t_eq((select status::text from public.tasks where title = 'Системна'), 'done', 'службовий ключ');
 rollback;
 
+-- 8. Службові секрети не видно нікому з команди
+begin;
+select t_as('Роман');
+select t_fail($$select value from public.internal_secrets$$, 'Роман читає службовий ключ');
+reset role;
+select t_as('anon');
+select t_fail($$select value from public.internal_secrets$$, 'анонім читає службовий ключ');
+reset role;
+select t_eq((select length(value) from public.internal_secrets where name = 'cron'), 64, 'ключ запуску створено');
+rollback;
+
 select 'усі перевірки прав пройдено' as result;
