@@ -61,16 +61,15 @@ begin
   return null;
 end $$;
 
-alter table public.employees drop column hours, drop column hours_unit;
+-- Старі колонки hours/hours_unit більше не використовуються (залишені, щоб зміна нічого не стирала).
+comment on column public.employees.hours is 'Не використовується: години тепер у employee_hours';
+comment on column public.employees.hours_unit is 'Не використовується: години тепер у employee_hours';
 
 -- 4. Лише три типи договору
 alter table public.employees add constraint employees_contract_type_check3
   check (contract_type in ('DPP', 'DPČ', 'HPP'));
 
--- 5. Журнал змін годин
-alter table public.employee_changes drop constraint employee_changes_action_check;
-alter table public.employee_changes add constraint employee_changes_action_check
-  check (action in ('create', 'update', 'deactivate', 'reactivate', 'import', 'hours'));
+-- 5. Журнал змін годин (action = 'update', у значеннях є month)
 
 create or replace function public.employee_hours_stamp() returns trigger
 language plpgsql security definer set search_path = public as $$
@@ -96,7 +95,7 @@ begin
   values (
     r.employee_id,
     coalesce(public.current_member_id(), r.updated_by),
-    'hours',
+    'update',
     case when tg_op = 'INSERT' then jsonb_build_object('month', m, 'hours', null)
          else jsonb_build_object('month', m, 'hours', old.hours) end,
     case when tg_op = 'DELETE' then jsonb_build_object('month', m, 'hours', null)

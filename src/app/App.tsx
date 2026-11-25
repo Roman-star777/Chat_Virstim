@@ -432,7 +432,7 @@ const FIELD_NAMES: Record<string, string> = { full_name: "імʼя", contract_ty
 const ACTIONS: Record<string, string> = { create: "додав(ла)", update: "змінив(ла)", deactivate: "прибрав(ла)", reactivate: "повернув(ла)", import: "початковий імпорт" };
 
 function describeChange(c: Change): string {
-  if (c.action === "hours" && c.new_values) {
+  if ((c.action === "hours" || c.action === "update") && c.new_values && "month" in c.new_values) {
     const m = String(c.new_values.month ?? "");
     const fmt = (v: unknown) => (v === null || v === undefined ? "—" : hoursLabel(Number(v)));
     return `години за ${isMonth(m) ? monthLabel(m).toLowerCase() : m}: ${fmt(c.old_values?.hours)} → ${fmt(c.new_values.hours)}`;

@@ -128,7 +128,7 @@ select t_eq((select m.name from public.employees e join public.members m on m.id
 select t_eq((select action from public.employee_changes order by id desc limit 1), 'create', 'журнал: create');
 select t_fail($$insert into public.employees (full_name, contract_type) values ('Петро Тест', 'IČO')$$, 'тип договору не з трьох');
 insert into public.employee_hours (employee_id, month, hours) select id, '2026-11-01', 40 from public.employees where full_name = 'Іван Тест';
-select t_eq((select action || ':' || (new_values->>'month') || ':' || (new_values->>'hours') from public.employee_changes order by id desc limit 1), 'hours:2026-11:40.00', 'журнал: години за місяць');
+select t_eq((select action || ':' || (new_values->>'month') || ':' || (new_values->>'hours') from public.employee_changes order by id desc limit 1), 'update:2026-11:40.00', 'журнал: години за місяць');
 select t_fail($$insert into public.employee_hours (employee_id, month, hours) select id, '2026-11-15', 1 from public.employees where full_name = 'Іван Тест'$$, 'місяць не з 1-го числа');
 select t_as('Саша');
 update public.employees set contract_type = 'DPP' where full_name = 'Іван Тест';
