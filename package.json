@@ -26,5 +26,8 @@
     "@types/react-dom": "^19.3.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.2"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }
