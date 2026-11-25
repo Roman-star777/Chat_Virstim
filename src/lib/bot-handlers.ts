@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { appUrl, tgCall, tgDownload } from "./bot";
+import { hasMainApp, postGroupButton, BOT_USERNAME } from "./group-button";
 import {
   MAX_BOT_DOWNLOAD, botMembershipChange, extractFile, isGroup, messageRow, storageName,
   type TgChatMemberUpdated, type TgMessage,
@@ -146,4 +147,18 @@ export async function onPrivateMessage(ctx: Ctx, m: TgMessage) {
     text,
     reply_markup: { inline_keyboard: [[{ text: "Відкрити задачі", web_app: { url: appUrl() } }]] },
   });
+}
+
+/** Команда /tasks у групі: бот надсилає кнопку міні-апки. */
+export function isTasksCommand(m: TgMessage): boolean {
+  const t = (m.text ?? "").trim().toLowerCase();
+  return t === "/tasks" || t === `/tasks@${BOT_USERNAME}` || t === "/app" || t === `/app@${BOT_USERNAME}`;
+}
+
+export async function onTasksCommand(m: TgMessage) {
+  if (!(await hasMainApp())) {
+    await tgCall("sendMessage", { chat_id: m.chat.id, text: "Кнопка ще не налаштована: Роману треба увімкнути міні-апку в BotFather." });
+    return;
+  }
+  await postGroupButton(m.chat.id, false);
 }

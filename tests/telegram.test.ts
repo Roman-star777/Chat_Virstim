@@ -19,6 +19,11 @@ describe("перевірка initData Telegram", () => {
     expect(verifyInitData(init, TOKEN, { now }).user.id).toBe(111);
   });
 
+  it("відкриття з групи (пряме посилання): та сама перевірка, людина — з user", () => {
+    const init = signInitData({ auth_date: authDate, user, chat_instance: "-5555", chat_type: "group", start_param: "group", signature: "abc" }, TOKEN);
+    expect(verifyInitData(init, TOKEN, { now }).user.id).toBe(111);
+  });
+
   it("відхиляє підпис іншим токеном", () => {
     const init = signInitData({ auth_date: authDate, user }, "999:OTHER");
     expect(() => verifyInitData(init, TOKEN, { now })).toThrow("Неправильний підпис");

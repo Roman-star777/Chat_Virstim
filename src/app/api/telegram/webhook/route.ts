@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { webhookSecret } from "@/lib/bot";
 import { dbService } from "@/lib/supabase";
 import {
-  loadContext, onEditedMessage, onGroupMessage, onMigrate, onMyChatMember, onPrivateMessage, storeFile,
+  isTasksCommand, loadContext, onEditedMessage, onTasksCommand, onGroupMessage, onMigrate, onMyChatMember, onPrivateMessage, storeFile,
 } from "@/lib/bot-handlers";
 import { isGroup, type TgUpdate } from "@/lib/telegram-update";
 
@@ -37,6 +37,7 @@ export async function POST(req: Request) {
       } else if (isGroup(m.chat)) {
         await onMigrate(db, ctx, m);
         if (ctx.groupChatId === m.chat.id && !m.migrate_to_chat_id) {
+          if (isTasksCommand(m)) await onTasksCommand(m);
           const job = await onGroupMessage(db, ctx, m);
           if (job) {
             after(async () => {
