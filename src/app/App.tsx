@@ -429,13 +429,13 @@ type EmpData = {
 type Change = { id: number; changed_by_name: string | null; changed_at: string; action: string; old_values: Record<string, unknown> | null; new_values: Record<string, unknown> | null };
 
 const FIELD_NAMES: Record<string, string> = { full_name: "імʼя", contract_type: "договір", hours: "години", hours_unit: "одиниця годин", active: "активний" };
-const ACTIONS: Record<string, string> = { create: "додав(ла)", update: "змінив(ла)", deactivate: "прибрав(ла)", reactivate: "повернув(ла)", import: "початковий імпорт" };
+const ACTIONS: Record<string, string> = { create: "додав(ла) до списку", update: "змінив(ла)", deactivate: "видалив(ла) зі списку", reactivate: "повернув(ла) до списку", import: "початковий імпорт" };
 
 function describeChange(c: Change): string {
   if ((c.action === "hours" || c.action === "update") && c.new_values && "month" in c.new_values) {
     const m = String(c.new_values.month ?? "");
     const fmt = (v: unknown) => (v === null || v === undefined ? "—" : hoursLabel(Number(v)));
-    return `години за ${isMonth(m) ? monthLabel(m).toLowerCase() : m}: ${fmt(c.old_values?.hours)} → ${fmt(c.new_values.hours)}`;
+    return `змінив(ла) години за ${isMonth(m) ? monthLabel(m).toLowerCase() : m}: ${fmt(c.old_values?.hours)} → ${fmt(c.new_values.hours)}`;
   }
   if (c.action !== "update" || !c.old_values || !c.new_values) return ACTIONS[c.action] ?? c.action;
   const parts = Object.keys(c.new_values)
@@ -452,6 +452,17 @@ function Employees({ api }: { api: Api }) {
   const [history, setHistory] = useState<{ id: string; changes: Change[] } | null>(null);
   const [adding, setAdding] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [allHistory, setAllHistory] = useState<(Change & { employee_name: string })[] | null>(null);
+  const [histOpen, setHistOpen] = useState(false);
+
+  async function toggleAllHistory() {
+    if (histOpen) { setHistOpen(false); return; }
+    setHistOpen(true);
+    try {
+      const { changes } = await api<{ changes: (Change & { employee_name: string })[] }>("/api/employees/history");
+      setAllHistory(changes);
+    } catch (e) { setError((e as Error).message); }
+  }
 
   const load = useCallback(async (m: string | null) => {
     try {
@@ -621,6 +632,14 @@ function Employees({ api }: { api: Api }) {
       ) : (
         <button className="add-btn" onClick={() => setAdding(true)}>+ Додати працівника</button>
       ))}
+      <button className="add-btn hist-btn" onClick={toggleAllHistory}>{histOpen ? "Сховати історію змін" : "🕓 Історія змін"}</button>
+      {histOpen && (
+        <div className="elist histall">
+          {!allHistory && <div className="note" style={{ padding: "12px 0" }}>Завантаження…</div>}
+          {allHistory && <HistoryList changes={allHistory} />}
+        </div>
+      )}
+
       {!data.canManage && <div className="note" style={{ marginTop: 10 }}>Ви можете змінювати тип договору. Години, додавання і видалення — у Романа і Сергія.</div>}
     </>
   );
@@ -681,5 +700,27 @@ function AddEmployee({ month, onSave, onCancel }: {
         <button className="pill-btn wide" disabled={saving} onClick={submit}>{saving ? "Зберігаю…" : "Додати"}</button>
       </div>
     </div>
+  );
+}
+
+function HistoryList({ changes }: { changes: (Change & { employee_name: string })[] }) {
+  const imports = changes.filter((c) => c.action === "import");
+  const rest = changes.filter((c) => c.action !== "import");
+  if (!changes.length) return <div className="note" style={{ padding: "12px 0" }}>Змін ще не було.</div>;
+  return (
+    <>
+      {rest.map((c) => (
+        <div key={c.id} className="hrow">
+          <div className="hmeta">{formatDateTime(c.changed_at)} · <b>{c.changed_by_name ?? "система"}</b></div>
+          <div><span className="hname">{c.employee_name}</span>: {describeChange(c)}</div>
+        </div>
+      ))}
+      {imports.length > 0 && (
+        <div className="hrow">
+          <div className="hmeta">{formatDateTime(imports[imports.length - 1].changed_at)} · <b>система</b></div>
+          <div>початковий список: {imports.length} працівників</div>
+        </div>
+      )}
+    </>
   );
 }

@@ -109,3 +109,10 @@ input.hin:focus { outline: none; border-color: var(--btn); background: #fff; }
 .addrow input { flex: 1; min-width: 0; }
 .hist { padding: 0 0 8px; }
 .ehead > span { font-size: 11px; }
+.hist-btn { border-style: solid; border-color: var(--line); color: var(--text); background: var(--bg2); }
+.histall { padding: 4px 14px; }
+.hrow { padding: 9px 0; font-size: 13.5px; line-height: 1.35; }
+.hrow + .hrow { border-top: 1px solid var(--line); }
+.hmeta { font-size: 12px; color: var(--hint); margin-bottom: 2px; }
+.hmeta b { color: var(--text); font-weight: 600; }
+.hname { font-weight: 600; }
